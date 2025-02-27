@@ -123,3 +123,35 @@ New-ItemProperty -Path $registryPath -Name "AccessNetworkAsComputerObject" -Valu
 New-ItemProperty -Path $registryPath -Name "DeleteLocalProfileWhenVHDShouldApply" -Value 1 -Force | Out-Null
 New-ItemProperty -Path $registryPath -Name "FlipFlopProfileDirectoryName" -Value 1 -Force | Out-Null
 New-ItemProperty -Path $registryPath -Name "VolumeType" -Value "VHDX" -PropertyType String -Force | Out-Null
+
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
+    [Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    exit
+}
+
+# Define the FSLogix registry path
+$regPath = "HKLM:\SOFTWARE\FSLogix\Profiles"
+
+# Check if the registry key exists; if not, create it
+if (!(Test-Path $regPath)) {
+
+    New-Item -Path "HKLM:\SOFTWARE\FSLogix" -Name "Profiles" -Force | Out-Null
+} else {
+
+}
+
+# Enable FSLogix Profiles by setting the 'Enabled' value to 1
+Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1 -Type DWord
+
+
+# Optionally: Set the VHDLocations to point to your file share where containers will be stored
+$sharePath = "\\YourServer\FSLogixProfiles"  # <-- Change this to your actual file share path
+Set-ItemProperty -Path $regPath -Name "VHDLocations" -Value @($sharePath) -Type MultiString
+
+
+# (Optional) Configure additional settings here if required, such as local caching settings.
+
+# Restart the FSLogix service to apply changes
+
+Restart-Service -Name "frxsvc" -Force
+

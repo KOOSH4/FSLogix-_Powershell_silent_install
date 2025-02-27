@@ -102,3 +102,16 @@ else {
     Write-Host "FSLogix already installed and up to date."
 
 }
+
+$storageAccount = $storageAcc
+$fileServer = "$($storageAccount).file.core.windows.net"
+$profileShare = "\\$($fileServer)\userprofiles\"
+$user = "localhost\avdaadstorage"
+
+# Use the secret passed from Terraform
+cmdkey.exe /add:$fileServer /user:$($user) /pass:$($secret)
+
+# Configure FSLogix registry settings
+New-ItemProperty -Path "HKLM:\SOFTWARE\FSLogix\Profiles" -Name "Enabled" -Value "1" -PropertyType String -Force
+New-ItemProperty -Path "HKLM:\SOFTWARE\FSLogix\Profiles" -Name "VHDLocations" -Value $profileShare -force
+New-ItemProperty -Path "HKLM:\SOFTWARE\FSLogix\Profiles" -Name "AccessNetworkAsComputerObject" -Value 1 -force

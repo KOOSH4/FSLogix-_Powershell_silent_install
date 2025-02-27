@@ -104,7 +104,7 @@ else {
 }
 
 $fileServer = "$($storageAccountName).file.core.windows.net"
-$profileShare = "\\$($fileServer)\userprofiles\"
+$profileShare = "\\$($fileServer)\$($fileShareName)\"
 $user = "localhost\$($storageAccountName)"
 
 # Use the secret passed from Terraform

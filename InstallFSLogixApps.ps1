@@ -106,7 +106,7 @@ else {
 $storageAccount = $storageAcc
 $fileServer = "$($storageAccount).file.core.windows.net"
 $profileShare = "\\$($fileServer)\userprofiles\"
-$user = "localhost\avdaadstorage"
+$user = "localhost\$($storageAccount)"
 
 # Use the secret passed from Terraform
 cmdkey.exe /add:$fileServer /user:$($user) /pass:$($secret)

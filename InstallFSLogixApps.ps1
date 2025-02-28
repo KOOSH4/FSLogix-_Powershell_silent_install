@@ -1,157 +1,157 @@
-## Install FSLogix Apps
-
-## This script checks the current version of FSLogix based on the short URL redirected filename
-## (eg: FSLogix_Apps_2.9.8440.42104.zip) and installs if FSLogix is not installed, or is older
-## than the currently installed version. Version comparison uses [System.Version] object type cast
-## to ensure any major version numbers are accounted for.
-
-## The script will extract just the 64 bit FSLogix Apps installer exe from the downloaded zip
-
-## Caveats: If MS changes the short URL, the redirection, or the path/filename within the zip
-##          then the script will break.
-##          It is strongly recommended not to autorun this script due to unexpected bugs in FSLogix
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$storageAccountName,
+    [Parameter(Mandatory=$true)]
+    [string]$fileShareName,
+    [Parameter(Mandatory=$true)]
+    [string]$secret
+)
 
 $FSLogixURL = "https://aka.ms/fslogix/download"
 $FSLogixDownload = "FSLogixSetup.zip"
 $FSLogixInstaller = "FSLogixAppsSetup.exe"
 $ZipFileToExtract = "x64/Release/FSLogixAppsSetup.exe"
-$Zip = "$env:temp\$FSLogixDownload"
-$Installer = "$env:temp\$FSLogixInstaller"
+$Zip = Join-Path $env:TEMP $FSLogixDownload
+$Installer = Join-Path $env:TEMP $FSLogixInstaller
 $downloadAndInstall = $false
 
 $ProductName = "Microsoft FSLogix Apps"
-
 Write-Host "Checking registry for $ProductName"
 
-# Get FSLogix version number if installed
-$fslogixsearch = (get-wmiobject Win32_Product | where-object name -eq "Microsoft FSLogix Apps" | select-object Version)
-
-switch ($fslogixsearch.count) {
-    0 {
-        # Not found
-        $fslogixver = $null
+# Retrieve installed FSLogix version using registry (avoid slow Win32_Product)
+try {
+    $regPathUninstall = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    $installedFSLogix = Get-ChildItem $regPathUninstall | Where-Object { $_.GetValue("DisplayName") -eq $ProductName }
+    if ($null -eq $installedFSLogix) {
+        $fslogixver = [version]"0.0.0.0"
         $downloadAndInstall = $true
     }
-    1 {
-        # One entry returned
-        $fslogixver = [System.Version]$fslogixsearch.Version
+    else {
+        $fslogixverString = $installedFSLogix | Select-Object -ExpandProperty "DisplayVersion" -First 1
+        $fslogixver = [version]$fslogixverString
         Write-Host "FSLogix version installed: $fslogixver"
     }
-    {$_ -gt 1} {
-        # two or more returned
-        $fslogixver = [System.Version]$fslogixsearch[0].Version
-        Write-Host "FSLogix version installed: $fslogixver"
-    }
-
 }
-
-# Find current FSLogix version from short URL:
-$WebRequest = [System.Net.WebRequest]::create($FSLogixURL)
-$WebResponse = $WebRequest.GetResponse()
-$ActualDownloadURL = $WebResponse.ResponseUri.AbsoluteUri
-$WebResponse.Close()
-
-$FSLogixCurrentVersion = [System.Version]((Split-Path $ActualDownloadURL -leaf).Split("_")[2]).Replace(".zip","")
-
-Write-Host "Current FSLogix version: $FSLogixCurrentVersion"
-
-# See if the current version is newer than the installed version:
-if ($FSLogixCurrentVersion -gt $fslogixver) {
-    # Current version greater than installed version, install new version
-    Write-Host "New version will be downloaded and installed. ($FSLogixCurrentVersion > $fslogixver)"
+catch {
+    Write-Host "Error retrieving installed version: $_"
+    $fslogixver = [version]"0.0.0.0"
     $downloadAndInstall = $true
 }
 
-# If $downloadAndInstall has been toggled true, download and install.
-if ($downloadAndInstall)
-{
-    Write-Host "Not installed... beginning install..."
-    # Download installer
-    Import-Module BitsTransfer
-    Write-Host "Downloading from: $FSLogixURL"
-    Write-Host "Saving file to: $Zip"
+# Get current FSLogix version from the redirect URL
+try {
+    $WebRequest = [System.Net.WebRequest]::Create($FSLogixURL)
+    $WebResponse = $WebRequest.GetResponse()
+    $ActualDownloadURL = $WebResponse.ResponseUri.AbsoluteUri
+    $WebResponse.Close()
 
-    Start-BitsTransfer -Source $FSLogixURL -Destination "$env:temp\$FSLogixDownload" -RetryInterval 60
+    $fileName = Split-Path $ActualDownloadURL -Leaf
+    # Expected format: FSLogix_Apps_2.9.8440.42104.zip
+    $versionPart = (($fileName -split "_")[2] -replace "\.zip$","")
+    $FSLogixCurrentVersion = [version]$versionPart
+    Write-Host "Current FSLogix version available: $FSLogixCurrentVersion"
+}
+catch {
+    Write-Host "Error retrieving current version: $_"
+    exit 1
+}
 
-    # Extract file from zip: x64\Release\FSLogixAppsSetup.exe to $env:temp\FSLogixAppsSetup.exe
-
-    # Open zip
-    Add-Type -Assembly System.IO.Compression.FileSystem
-    $zipFile = [IO.Compression.ZipFile]::OpenRead($Zip)
-
-    # Retrieve the $ZipFileToExtract and extract to $Installer
-    $filetoextract = ($zipFile.Entries | Where-Object {$_.FullName -eq $ZipFileToExtract})
-    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($filetoextract[0], $Installer, $true)
-
-    # Run installer
-    Write-Host "Running $Installer /install /quiet /norestart"
-    Start-Process $Installer -wait -ArgumentList "/install /quiet /norestart"
-
-    # Wait for 5 minutes so that the files can be deleted because despite -wait being specified, it doesn't actually wait for all processes to finish
-    Start-Sleep -Seconds 300
-
-    # Close the zip file so it can be deleted
-    $zipFile.Dispose()
-
-    # Clean up
-    Write-Host "Cleaning up, deleting $Installer and $Zip."
-    Remove-Item -Path $Installer -Force
-    Remove-Item -Path $Zip -Force
+if ($FSLogixCurrentVersion -gt $fslogixver) {
+    Write-Host "New version available ($FSLogixCurrentVersion) is newer than installed version ($fslogixver)."
+    $downloadAndInstall = $true
 }
 else {
-    Write-Host "FSLogix already installed and up to date."
-
+    Write-Host "Installed version is up-to-date."
 }
 
+if ($downloadAndInstall) {
+    Write-Host "Proceeding with FSLogix installation..."
 
-$fileServer = "$($storageAccount).file.core.windows.net"
-# Removed the extra double quote from the string literal.
-$profileShare = "\\$($fileServer)\userprofiles"
+    # Download installer using BITS
+    try {
+        Import-Module BitsTransfer -ErrorAction Stop
+        Write-Host "Downloading FSLogix from: $FSLogixURL"
+        Write-Host "Saving to: $Zip"
+        Start-BitsTransfer -Source $FSLogixURL -Destination $Zip -RetryInterval 60 -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Error downloading FSLogix: $_"
+        exit 1
+    }
 
-# Define registry path (adjust according to your environment)
-$registryPath = "HKLM:\SOFTWARE\FSLogix\Profiles"
+    # Extract the installer from the zip archive
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zipFile = [IO.Compression.ZipFile]::OpenRead($Zip)
+        $fileToExtract = $zipFile.Entries | Where-Object { $_.FullName -eq $ZipFileToExtract }
+        if ($fileToExtract) {
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($fileToExtract, $Installer, $true)
+            Write-Host "Extraction successful: $Installer"
+        }
+        else {
+            Write-Host "Error: Could not find $ZipFileToExtract in the zip archive."
+            $zipFile.Dispose()
+            exit 1
+        }
+        $zipFile.Dispose()
+    }
+    catch {
+        Write-Host "Error extracting FSLogix installer: $_"
+        exit 1
+    }
 
-$user = "localhost\$($storageAccount)"
-cmdkey.exe /add:$fileServer /user:$($user) /pass: $($secret)
+    # Run installer
+    try {
+        Write-Host "Running installer: $Installer /install /quiet /norestart"
+        Start-Process -FilePath $Installer -ArgumentList "/install", "/quiet", "/norestart" -Wait -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Error during installation: $_"
+        exit 1
+    }
 
+    # Allow time for installer processes to fully exit
+    Start-Sleep -Seconds 300
 
-New-ItemProperty -Path $registryPath -Name "Enabled" -Value "1" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $registryPath -Name "VHDLocations" -Value $profileShare -Force | Out-Null
-New-ItemProperty -Path $registryPath -Name "AccessNetworkAsComputerObject" -Value 1 -Force | Out-Null
-
-# Add additional settings
-New-ItemProperty -Path $registryPath -Name "DeleteLocalProfileWhenVHDShouldApply" -Value 1 -Force | Out-Null
-New-ItemProperty -Path $registryPath -Name "FlipFlopProfileDirectoryName" -Value 1 -Force | Out-Null
-New-ItemProperty -Path $registryPath -Name "VolumeType" -Value "VHDX" -PropertyType String -Force | Out-Null
-
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
-    [Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    exit
+    # Clean up downloaded files
+    Write-Host "Cleaning up installer files."
+    Remove-Item -Path $Installer -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $Zip -Force -ErrorAction SilentlyContinue
+}
+else {
+    Write-Host "No installation required."
 }
 
-# Define the FSLogix registry path
+# Configure FSLogix settings
+
+# Build the file server FQDN and profile share path
+$fileServer = "$storageAccountName.file.core.windows.net"
+$profileShare = "\\$fileServer\userprofiles"
+
+# Add credentials for file share access
+$user = "localhost\$storageAccountName"
+Write-Host "Setting up file share credentials for $fileServer"
+cmdkey.exe /add:$fileServer /user:$user /pass:$secret
+
+# Configure registry settings for FSLogix Profiles
 $regPath = "HKLM:\SOFTWARE\FSLogix\Profiles"
-
-# Check if the registry key exists; if not, create it
-if (!(Test-Path $regPath)) {
-
+if (-not (Test-Path $regPath)) {
     New-Item -Path "HKLM:\SOFTWARE\FSLogix" -Name "Profiles" -Force | Out-Null
-} else {
-
 }
 
-# Enable FSLogix Profiles by setting the 'Enabled' value to 1
-Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1 -Type DWord
-
-
-# Optionally: Set the VHDLocations to point to your file share where containers will be stored
-$sharePath = "\\YourServer\FSLogixProfiles"  # <-- Change this to your actual file share path
-Set-ItemProperty -Path $regPath -Name "VHDLocations" -Value @($sharePath) -Type MultiString
-
-
-# (Optional) Configure additional settings here if required, such as local caching settings.
+Write-Host "Configuring FSLogix registry settings..."
+Set-ItemProperty -Path $regPath -Name "Enabled" -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $regPath -Name "VHDLocations" -Value $profileShare -Force
+Set-ItemProperty -Path $regPath -Name "AccessNetworkAsComputerObject" -Value 1 -Force
+Set-ItemProperty -Path $regPath -Name "DeleteLocalProfileWhenVHDShouldApply" -Value 1 -Force
+Set-ItemProperty -Path $regPath -Name "FlipFlopProfileDirectoryName" -Value 1 -Force
+Set-ItemProperty -Path $regPath -Name "VolumeType" -Value "VHDX" -Type String -Force
 
 # Restart the FSLogix service to apply changes
-
-Restart-Service -Name "frxsvc" -Force
-
+try {
+    Write-Host "Restarting FSLogix service..."
+    Restart-Service -Name "frxsvc" -Force -ErrorAction Stop
+}
+catch {
+    Write-Host "Error restarting FSLogix service: $_"
+}

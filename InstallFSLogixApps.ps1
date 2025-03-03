@@ -39,9 +39,14 @@ function Write-Log {
     Write-Host "$timestamp - $message"
 }
 
+# Clean parameters of any single quotes that might have been passed from Terraform
+$storageAccountName = $storageAccountName.Replace("'", "").Trim()
+$fileShareName = $fileShareName.Replace("'", "").Trim()
+$secret = $secret.Replace("'", "").Trim()
+
 Write-Log "Starting FSLogix installation and configuration"
-Write-Log "Storage Account: $storageAccountName"
-Write-Log "File Share: $fileShareName"
+Write-Log "Storage Account (cleaned): $storageAccountName"
+Write-Log "File Share (cleaned): $fileShareName"
 
 # Create temp directory if it doesn't exist
 $tempDir = Join-Path $env:TEMP "FSLogixInstall"
@@ -158,7 +163,7 @@ try {
         Write-Log "Created registry path: $regPath"
     }
     
-    # Set the profile share path - FIXED: no single quotes around variables
+    # Set the profile share path with cleaned parameters
     $profileShare = "\\$storageAccountName.file.core.windows.net\$fileShareName"
     Write-Log "Setting profile share to: $profileShare"
     
@@ -173,25 +178,70 @@ try {
     
     Write-Log "FSLogix registry configuration completed"
     
-    # Configure storage account credentials - FIXED: using correct format for cmdkey
+    # Configure storage account credentials with cleaned parameters
     Write-Log "Configuring storage account credentials"
     
-    # Store credentials using cmdkey (properly formatted)
-    $cmdkeyResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"Azure\$storageAccountName" /pass:"$secret"
-    Write-Log "cmdkey result: $cmdkeyResult"
+    # Try multiple authentication methods
     
-    # Also add a network drive mapping for good measure (optional)
+    # Method 1: Standard credential format
+    Write-Log "Trying standard Azure Files credential format"
+    $cmdkeyResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"Azure\$storageAccountName" /pass:"$secret"
+    Write-Log "cmdkey standard result: $cmdkeyResult"
+    
+    # Method 2: Alternative credential format (some environments need this)
+    Write-Log "Trying alternative Azure Files credential format"
+    $cmdkeyAltResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"AZURE\$storageAccountName" /pass:"$secret"
+    Write-Log "cmdkey alternative result: $cmdkeyAltResult"
+    
+    # Method 3: Classic format with storage account name
+    Write-Log "Trying classic format with storage account name"
+    $cmdkeyClassicResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"$storageAccountName" /pass:"$secret"
+    Write-Log "cmdkey classic result: $cmdkeyClassicResult"
+
+    # Test connection to verify if any of the credential methods worked
     try {
-        # Attempt to create a test connection to verify credentials work
-        $testPath = "$profileShare\test-connection.txt"
+        Write-Log "Testing connection to Azure Files share"
+        
+        # First, try direct access to test SMB connectivity
         $testContent = "Testing connection at $(Get-Date)"
-        $testContent | Out-File -FilePath "$profileShare\test-connection.txt" -Force -ErrorAction Stop
-        Write-Log "Successfully verified connection to Azure file share"
-        Remove-Item -Path $testPath -Force -ErrorAction SilentlyContinue
+        $testFile = "test-connection-$(Get-Random).txt"
+        
+        # Try with different methods of accessing the path
+        $directPath = "\\$storageAccountName.file.core.windows.net\$fileShareName\$testFile"
+        
+        try {
+            $testContent | Out-File -FilePath $directPath -Force -ErrorAction Stop
+            Write-Log "Successfully verified connection to Azure file share using direct path"
+            Remove-Item -Path $directPath -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-Log "Direct path connection failed: $_"
+            
+            # Try mapping a drive
+            try {
+                $driveLetter = "Z:"
+                Write-Log "Trying to map network drive to $driveLetter"
+                New-PSDrive -Name Z -PSProvider FileSystem -Root "\\$storageAccountName.file.core.windows.net\$fileShareName" -Persist -ErrorAction Stop
+                
+                if (Test-Path $driveLetter) {
+                    Write-Log "Successfully mapped drive $driveLetter to Azure file share"
+                    $testContent | Out-File -FilePath "$driveLetter\$testFile" -Force -ErrorAction Stop
+                    Write-Log "Successfully wrote test file to mapped drive"
+                    Remove-Item -Path "$driveLetter\$testFile" -Force -ErrorAction SilentlyContinue
+                    Remove-PSDrive -Name Z -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Log "Drive mapping failed - drive not accessible"
+                    throw "Could not access mapped drive"
+                }
+            } catch {
+                Write-Log "Drive mapping test failed: $_"
+                # Don't throw as we still want to continue with configuration
+            }
+        }
     } catch {
-        Write-Log "Warning: Could not verify connection to Azure file share: $_"
+        Write-Log "Warning: Could not verify connection to Azure file share after multiple attempts: $_"
         Write-Log "This may be a permissions issue or network connectivity problem"
-        # Not throwing here as this is just a verification step
+        Write-Log "FSLogix configuration will continue but may not work until connectivity issues are resolved"
+        # Don't throw as this is just a verification step
     }
 } catch {
     Write-Log "Error configuring FSLogix: $_"

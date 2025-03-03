@@ -4,10 +4,16 @@ param(
     [string]$Secret
 )
 
+$storageAccountName = $storageAccountName.Replace("'", "").Trim()
+$fileShareName = $fileShareName.Replace("'", "").Trim()
+$secret = $secret.Replace("'", "").Trim()
+
 # Test connection to the file server
 $FileServer = "$StorageAccountName.file.core.windows.net"
 $ProfileShare = "\\$($FileServer)\$FileShareName"
 $UserName = "localhost\$StorageAccountName"
+
+
 
 # Test connection to the file server
 $connectTestResult = Test-NetConnection -ComputerName $FileServer -Port 445

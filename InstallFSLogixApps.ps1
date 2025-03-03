@@ -185,7 +185,7 @@ try {
         Write-Log "Port 445 connectivity test succeeded to $storageAccountName.file.core.windows.net"
         
         # Build the cmdkey command with the proper quoting
-        $cmdkeyCommand = "cmd.exe /C "cmdkey /add:`"$($storageAccountName).file.core.windows.net`" /user:`"localhost\$($storageAccountName)`" /pass:`"$secret`""
+        $cmdkeyCommand = "cmd.exe /C `"cmdkey /add:`"$($storageAccountName).file.core.windows.net`" /user:`"localhost\$($storageAccountName)`" /pass:`"$secret`"`""
         Write-Log "Executing cmdkey command: $cmdkeyCommand"
         $cmdkeyResult = Invoke-Expression $cmdkeyCommand
         Write-Log "cmdkey result: $cmdkeyResult"

@@ -158,7 +158,7 @@ try {
         Write-Log "Created registry path: $regPath"
     }
     
-    # Set the profile share path
+    # Set the profile share path - FIXED: no single quotes around variables
     $profileShare = "\\$storageAccountName.file.core.windows.net\$fileShareName"
     Write-Log "Setting profile share to: $profileShare"
     
@@ -173,11 +173,11 @@ try {
     
     Write-Log "FSLogix registry configuration completed"
     
-    # Configure storage account credentials
+    # Configure storage account credentials - FIXED: using correct format for cmdkey
     Write-Log "Configuring storage account credentials"
     
-    # Store credentials using cmdkey
-    $cmdkeyResult = cmdkey /add:$storageAccountName.file.core.windows.net /user:"localhost\$storageAccountName" /pass:$secret
+    # Store credentials using cmdkey (properly formatted)
+    $cmdkeyResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"Azure\$storageAccountName" /pass:"$secret"
     Write-Log "cmdkey result: $cmdkeyResult"
     
     # Also add a network drive mapping for good measure (optional)
@@ -185,7 +185,7 @@ try {
         # Attempt to create a test connection to verify credentials work
         $testPath = "$profileShare\test-connection.txt"
         $testContent = "Testing connection at $(Get-Date)"
-        $testContent | Out-File -FilePath "\\$storageAccountName.file.core.windows.net\$fileShareName\test-connection.txt" -Force -ErrorAction Stop
+        $testContent | Out-File -FilePath "$profileShare\test-connection.txt" -Force -ErrorAction Stop
         Write-Log "Successfully verified connection to Azure file share"
         Remove-Item -Path $testPath -Force -ErrorAction SilentlyContinue
     } catch {

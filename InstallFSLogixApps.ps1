@@ -178,71 +178,47 @@ try {
     
     Write-Log "FSLogix registry configuration completed"
     
-    # Configure storage account credentials with cleaned parameters
-    Write-Log "Configuring storage account credentials"
-    
-    # Try multiple authentication methods
-    
-    # Method 1: Standard credential format
-    Write-Log "Trying standard Azure Files credential format"
-    $cmdkeyResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"Azure\$storageAccountName" /pass:"$secret"
-    Write-Log "cmdkey standard result: $cmdkeyResult"
-    
-    # Method 2: Alternative credential format (some environments need this)
-    Write-Log "Trying alternative Azure Files credential format"
-    $cmdkeyAltResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"AZURE\$storageAccountName" /pass:"$secret"
-    Write-Log "cmdkey alternative result: $cmdkeyAltResult"
-    
-    # Method 3: Classic format with storage account name
-    Write-Log "Trying classic format with storage account name"
-    $cmdkeyClassicResult = cmdkey /add:"$storageAccountName.file.core.windows.net" /user:"$storageAccountName" /pass:"$secret"
-    Write-Log "cmdkey classic result: $cmdkeyClassicResult"
-
-    # Test connection to verify if any of the credential methods worked
-    try {
-        Write-Log "Testing connection to Azure Files share"
+    # Test connectivity and configure storage account credentials
+    Write-Log "Testing connectivity to Azure Files share on port 445"
+    $connectTestResult = Test-NetConnection -ComputerName "$storageAccountName.file.core.windows.net" -Port 445
+    if ($connectTestResult.TcpTestSucceeded) {
+        Write-Log "Port 445 connectivity test succeeded to $storageAccountName.file.core.windows.net"
         
-        # First, try direct access to test SMB connectivity
+        # Build the cmdkey command with the proper quoting
+        $cmdkeyCommand = "cmd.exe /C "cmdkey /add:`"$($storageAccountName).file.core.windows.net`" /user:`"localhost\$($storageAccountName)`" /pass:`"$secret`""
+        Write-Log "Executing cmdkey command: $cmdkeyCommand"
+        $cmdkeyResult = Invoke-Expression $cmdkeyCommand
+        Write-Log "cmdkey result: $cmdkeyResult"
+        
+        # Mount the drive to verify connectivity
+        try {
+            $driveLetter = "Z:"
+            Write-Log "Attempting to mount drive $driveLetter for connectivity test"
+            New-PSDrive -Name Z -PSProvider FileSystem -Root "\\$storageAccountName.file.core.windows.net\$fileShareName" -Persist -ErrorAction Stop
+            Write-Log "Drive $driveLetter mapped successfully"
+            # Optionally remove the drive mapping after testing if persistent mapping is not desired.
+            Remove-PSDrive -Name Z -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-Log "Drive mapping test failed: $_"
+        }
+    } else {
+        Write-Error "Unable to reach $storageAccountName.file.core.windows.net via port 445. Check that your organization or ISP is not blocking port 445, or consider using a VPN/tunneling solution."
+    }
+    
+    # Test connection to verify if the share is accessible
+    try {
+        Write-Log "Testing direct connection to Azure Files share"
         $testContent = "Testing connection at $(Get-Date)"
         $testFile = "test-connection-$(Get-Random).txt"
-        
-        # Try with different methods of accessing the path
         $directPath = "\\$storageAccountName.file.core.windows.net\$fileShareName\$testFile"
-        
-        try {
-            $testContent | Out-File -FilePath $directPath -Force -ErrorAction Stop
-            Write-Log "Successfully verified connection to Azure file share using direct path"
-            Remove-Item -Path $directPath -Force -ErrorAction SilentlyContinue
-        } catch {
-            Write-Log "Direct path connection failed: $_"
-            
-            # Try mapping a drive
-            try {
-                $driveLetter = "Z:"
-                Write-Log "Trying to map network drive to $driveLetter"
-                New-PSDrive -Name Z -PSProvider FileSystem -Root "\\$storageAccountName.file.core.windows.net\$fileShareName" -Persist -ErrorAction Stop
-                
-                if (Test-Path $driveLetter) {
-                    Write-Log "Successfully mapped drive $driveLetter to Azure file share"
-                    $testContent | Out-File -FilePath "$driveLetter\$testFile" -Force -ErrorAction Stop
-                    Write-Log "Successfully wrote test file to mapped drive"
-                    Remove-Item -Path "$driveLetter\$testFile" -Force -ErrorAction SilentlyContinue
-                    Remove-PSDrive -Name Z -Force -ErrorAction SilentlyContinue
-                } else {
-                    Write-Log "Drive mapping failed - drive not accessible"
-                    throw "Could not access mapped drive"
-                }
-            } catch {
-                Write-Log "Drive mapping test failed: $_"
-                # Don't throw as we still want to continue with configuration
-            }
-        }
+        $testContent | Out-File -FilePath $directPath -Force -ErrorAction Stop
+        Write-Log "Successfully verified connection to Azure file share using direct path"
+        Remove-Item -Path $directPath -Force -ErrorAction SilentlyContinue
     } catch {
-        Write-Log "Warning: Could not verify connection to Azure file share after multiple attempts: $_"
-        Write-Log "This may be a permissions issue or network connectivity problem"
+        Write-Log "Direct path connection failed: $_"
         Write-Log "FSLogix configuration will continue but may not work until connectivity issues are resolved"
-        # Don't throw as this is just a verification step
     }
+    
 } catch {
     Write-Log "Error configuring FSLogix: $_"
     throw "Failed to configure FSLogix"
@@ -252,11 +228,9 @@ try {
 try {
     Write-Log "Cleaning up temporary files"
     if (Test-Path $Zip) { Remove-Item $Zip -Force }
-    # Don't remove the installer in case it's needed for troubleshooting
     Write-Log "Cleanup completed"
 } catch {
     Write-Log "Warning: Failed to clean up temporary files: $_"
-    # Non-critical error, don't throw
 }
 
 # Restart FSLogix service to apply changes
@@ -271,7 +245,6 @@ try {
     }
 } catch {
     Write-Log "Warning: Failed to restart FSLogix service: $_"
-    # Non-critical error, don't throw
 }
 
 Write-Log "FSLogix installation and configuration completed successfully"
